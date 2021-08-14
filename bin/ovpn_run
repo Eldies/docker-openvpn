@@ -38,10 +38,18 @@ function addArg {
 # set up iptables rules and routing
 # this allows rules/routing to be altered by supplying this function
 # in an included file, such as ovpn_env.sh
+# or from environment variables IPTABLES_RULE_[0-9]+
 function setupIptablesAndRouting {
     iptables -t nat -C POSTROUTING -s $OVPN_SERVER -o $OVPN_NATDEVICE -j MASQUERADE 2>/dev/null || {
       iptables -t nat -A POSTROUTING -s $OVPN_SERVER -o $OVPN_NATDEVICE -j MASQUERADE
     }
+
+    while read i; do
+        iptables -C $i 2>/dev/null || {
+            iptables -A $i
+        }
+    done < <(env | awk '/^IPTABLES_RULE_[0-9]+/ {sub (/^[^=]*=/, "", $0); print}')
+
     for i in "${OVPN_ROUTES[@]}"; do
         iptables -t nat -C POSTROUTING -s "$i" -o $OVPN_NATDEVICE -j MASQUERADE 2>/dev/null || {
           iptables -t nat -A POSTROUTING -s "$i" -o $OVPN_NATDEVICE -j MASQUERADE
@@ -49,6 +57,27 @@ function setupIptablesAndRouting {
     done
 }
 
+# set up ccd files
+# this allows ccd files to be filled from environment variables CCD_FILES_<username>
+function setupCCDFiles {
+    declare -A ccd_files
+    while read i; do
+        value=$(echo $i | awk '{sub (/^[^=]*=/, "", $0); print}')
+        username=$(echo $i | awk '{sub (/=.*$/, "", $0); print}')
+        ccd_files["$username"]=$value
+    done < <(env | awk '/^CCD_FILES_[a-zA-Z0-9_]+/ {sub (/^CCD_FILES_/, "", $0); print}')
+
+    echo $ccd_files
+    if [[ ${#ccd_files[@]} -gt 0 ]]; then
+        rm -f /etc/openvpn/ccd/*
+        for username in "${!ccd_files[@]}"; do
+            echo ${ccd_files[$username]} > /etc/openvpn/ccd/$username
+        done
+    fi
+    echo "${ccd_files[@]}"
+    echo "${!ccd_files[@]}"
+
+}
 
 addArg "--config" "$OPENVPN/openvpn.conf"
 
@@ -73,6 +102,8 @@ if [ "$OVPN_DEFROUTE" != "0" ] || [ "$OVPN_NAT" == "1" ] ; then
 	# a replacement function in, for example, ovpn_env.sh
 	setupIptablesAndRouting
 fi
+
+setupCCDFiles
 
 # Use a copy of crl.pem as the CRL Needs to be readable by the user/group
 # OpenVPN is running as.  Only pass arguments to OpenVPN if it's found.
